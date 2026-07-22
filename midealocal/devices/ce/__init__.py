@@ -113,7 +113,7 @@ class MideaCEDevice(MideaDevice):
         elif self._attributes[DeviceAttributes.eco_mode]:
             self._attributes[DeviceAttributes.mode] = "ECO mode"
         else:
-            self._attributes[DeviceAttributes.mode] = "None"
+            self._attributes[DeviceAttributes.mode] = "Normal"
         new_status[DeviceAttributes.mode.value] = self._attributes[
             DeviceAttributes.mode
         ]
