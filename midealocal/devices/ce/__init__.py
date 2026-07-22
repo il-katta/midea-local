@@ -39,7 +39,7 @@ class DeviceAttributes(StrEnum):
     filter_cleaning_reminder = "filter_cleaning_reminder"
     filter_change_reminder = "filter_change_reminder"
     error_code = "error_code"
-    # Attributi del Clivet VMC (body corto, vedi clivet.py)
+    # Clivet VMC attributes (short body, see clivet.py)
     target_temperature = "target_temperature"
     fan_level = "fan_level"
 
@@ -173,8 +173,8 @@ class ClivetVMCDevice(MideaCEDevice):
     ) -> None:
         """Initialize Clivet VMC device."""
         super().__init__(customize=customize, **kwargs)
-        # La VMC è sempre accesa quando comunica; il body corto non ha
-        # sensori qualità aria, quindi niente valori inventati.
+        # The VMC is always "on" when communicating; the short body carries
+        # no air quality sensors, so expose no fabricated values.
         self._attributes[DeviceAttributes.power] = True
         self._attributes[DeviceAttributes.target_temperature] = None
         self._attributes[DeviceAttributes.fan_level] = None
@@ -182,7 +182,7 @@ class ClivetVMCDevice(MideaCEDevice):
     def process_message(self, msg: bytes) -> dict[str, Any]:
         """Clivet VMC process message.
 
-        Nessuna sintesi sleep/eco: il mode è un campo reale del body.
+        No sleep/eco synthesis: mode is a real field of the body.
         """
         message = MessageClivetVMCResponse(msg)
         _LOGGER.debug("[%s] Received: %s", self.device_id, message)
@@ -213,8 +213,8 @@ class ClivetVMCDevice(MideaCEDevice):
 class MideaAppliance(MideaCEDevice):
     """Midea CE appliance.
 
-    Factory: seleziona il device in base al modello (il Clivet VMC parla
-    un dialetto a 8 byte incompatibile col parsing CE standard).
+    Factory: selects the device class based on the model (the Clivet VMC
+    speaks an 8-byte dialect incompatible with the standard CE parsing).
     """
 
     def __new__(cls, *args: Any, **kwargs: Any) -> "MideaCEDevice":
