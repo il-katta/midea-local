@@ -45,6 +45,7 @@ class ClivetVMCMessageBody(MessageBody):
         self.fan_level = "normal"
         self.target_temperature: float | None = None
         self.current_temperature: float | None = None
+        self.unknown_byte6: int | None = None
 
         # Parse only if we have enough bytes
         body_len = len(body)
@@ -83,6 +84,11 @@ class ClivetVMCMessageBody(MessageBody):
         # Byte 5: CURRENT/AMBIENT temperature (sensor reading) in °C
         # This is the actual room temperature
         self.current_temperature = float(body[5])
+
+        # Byte 6: meaning unknown, exposed raw for reverse engineering.
+        # Observed constant 0x2C (44) so far; candidate: error/status register
+        # (docstring above says "Reserved (0x00)" but live frames disagree).
+        self.unknown_byte6 = body[6] if body_len >= 7 else None
 
         # Byte 7: AUTO substate (only relevant in AUTO mode)
         # In AUTO mode, byte[7] may indicate what action AUTO is taking:

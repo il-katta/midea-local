@@ -64,6 +64,11 @@ class TestClivetVMCMessageBody:
         assert body.target_temperature == 24.0
         assert body.current_temperature == 27.0
 
+    def test_unknown_byte6_is_exposed_raw(self) -> None:
+        """Test byte[6]: not yet mapped, exposed raw for reverse engineering."""
+        body = ClivetVMCMessageBody(BODY_COOLING)
+        assert body.unknown_byte6 == 0x2C
+
     def test_heating_silent_frame(self) -> None:
         """Test synthetic frame: heating with silent fan."""
         body = ClivetVMCMessageBody(BODY_HEATING_SILENT)
@@ -127,6 +132,7 @@ class TestClivetVMCDevice:
         assert self.device.attributes[DeviceAttributes.mode] is None
         assert self.device.attributes[DeviceAttributes.target_temperature] is None
         assert self.device.attributes[DeviceAttributes.fan_level] is None
+        assert self.device.attributes[DeviceAttributes.unknown_byte6] is None
 
     def test_modes(self) -> None:
         """Test Clivet modes."""

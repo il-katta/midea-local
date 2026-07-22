@@ -42,6 +42,7 @@ class DeviceAttributes(StrEnum):
     # Clivet VMC attributes (short body, see clivet.py)
     target_temperature = "target_temperature"
     fan_level = "fan_level"
+    unknown_byte6 = "unknown_byte6"
 
 
 class MideaCEDevice(MideaDevice):
@@ -178,6 +179,7 @@ class ClivetVMCDevice(MideaCEDevice):
         self._attributes[DeviceAttributes.power] = True
         self._attributes[DeviceAttributes.target_temperature] = None
         self._attributes[DeviceAttributes.fan_level] = None
+        self._attributes[DeviceAttributes.unknown_byte6] = None
 
     def process_message(self, msg: bytes) -> dict[str, Any]:
         """Clivet VMC process message.
