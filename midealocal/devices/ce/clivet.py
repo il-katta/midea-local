@@ -103,25 +103,15 @@ class ClivetVMCMessageBody(MessageBody):
         else:
             self.temperature = self.current_temperature
 
-        # Legacy attributes (for compatibility with standard CE)
-        # These don't actually exist on Clivet VMC
-        self.pm25 = 0
-        self.co2 = 0
-        self.current_humidity: float | None = None
-        self.hcho: float | None = None
-        self.child_lock = False
-        self.scheduled = False
-        self.aux_heating: bool | None = None
-        self.link_to_ac = False
-        self.sleep_mode = False
-        self.eco_mode = False
-        self.powerful_purify = False
-        self.filter_cleaning_reminder = False
-        self.filter_change_reminder = False
-        self.error_code = 0
+        # Deliberately NO fabricated standard-CE fields (co2, pm25,
+        # filter reminders, error_code, ...): the 8-byte frame does not
+        # carry them, and hardcoded defaults proved actively harmful —
+        # filter_change_reminder was reported False while the real device
+        # showed the C3 filter alarm in the app.
 
-        # Map fan_level to numeric speed (0-100) for compatibility
-        # This is an approximation since Clivet has only 3 discrete levels
+        # Selector POSITION as a percentage (for slider-style UIs), not an
+        # absolute airflow: the real flow scale is the installer "base"
+        # parameter set from the panel, which this frame does not carry.
         fan_speed_map = {
             "silent": 33,    # ~33%
             "reduced": 66,   # ~66%

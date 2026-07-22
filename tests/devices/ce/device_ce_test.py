@@ -69,6 +69,30 @@ class TestClivetVMCMessageBody:
         body = ClivetVMCMessageBody(BODY_COOLING)
         assert body.unknown_byte6 == 0x2C
 
+    def test_fan_speed_reports_selector_position(self) -> None:
+        """Test fan_speed: selector position percentage, not absolute airflow."""
+        assert ClivetVMCMessageBody(BODY_COOLING).fan_speed == 100
+        assert ClivetVMCMessageBody(BODY_HEATING_SILENT).fan_speed == 33
+
+    def test_no_fabricated_fields(self) -> None:
+        """Test the body only reports what the 8-byte frame carries.
+
+        Regression: filter_change_reminder was hardcoded False while the real
+        device showed the C3 filter alarm in the app.
+        """
+        body = ClivetVMCMessageBody(BODY_COOLING)
+        for fabricated in (
+            "co2",
+            "pm25",
+            "error_code",
+            "filter_change_reminder",
+            "filter_cleaning_reminder",
+            "eco_mode",
+            "sleep_mode",
+            "child_lock",
+        ):
+            assert not hasattr(body, fabricated), fabricated
+
     def test_heating_silent_frame(self) -> None:
         """Test synthetic frame: heating with silent fan."""
         body = ClivetVMCMessageBody(BODY_HEATING_SILENT)
@@ -133,6 +157,26 @@ class TestClivetVMCDevice:
         assert self.device.attributes[DeviceAttributes.target_temperature] is None
         assert self.device.attributes[DeviceAttributes.fan_level] is None
         assert self.device.attributes[DeviceAttributes.unknown_byte6] is None
+
+    def test_unsupported_attributes_are_absent(self) -> None:
+        """Test attributes the frame cannot report are absent, not lying defaults."""
+        for absent in (
+            DeviceAttributes.co2,
+            DeviceAttributes.pm25,
+            DeviceAttributes.error_code,
+            DeviceAttributes.filter_change_reminder,
+            DeviceAttributes.filter_cleaning_reminder,
+            DeviceAttributes.eco_mode,
+            DeviceAttributes.sleep_mode,
+            DeviceAttributes.child_lock,
+            DeviceAttributes.scheduled,
+            DeviceAttributes.link_to_ac,
+            DeviceAttributes.powerful_purify,
+            DeviceAttributes.aux_heating,
+            DeviceAttributes.current_humidity,
+            DeviceAttributes.hcho,
+        ):
+            assert absent not in self.device.attributes, absent
 
     def test_modes(self) -> None:
         """Test Clivet modes."""

@@ -175,7 +175,25 @@ class ClivetVMCDevice(MideaCEDevice):
         """Initialize Clivet VMC device."""
         super().__init__(customize=customize, **kwargs)
         # The VMC is always "on" when communicating; the short body carries
-        # no air quality sensors, so expose no fabricated values.
+        # no air quality sensors, so expose no fabricated values: attributes
+        # the frame cannot report are removed instead of lying with defaults.
+        for unsupported in (
+            DeviceAttributes.co2,
+            DeviceAttributes.pm25,
+            DeviceAttributes.current_humidity,
+            DeviceAttributes.hcho,
+            DeviceAttributes.child_lock,
+            DeviceAttributes.scheduled,
+            DeviceAttributes.link_to_ac,
+            DeviceAttributes.sleep_mode,
+            DeviceAttributes.eco_mode,
+            DeviceAttributes.aux_heating,
+            DeviceAttributes.powerful_purify,
+            DeviceAttributes.filter_cleaning_reminder,
+            DeviceAttributes.filter_change_reminder,
+            DeviceAttributes.error_code,
+        ):
+            self._attributes.pop(unsupported, None)
         self._attributes[DeviceAttributes.power] = True
         self._attributes[DeviceAttributes.target_temperature] = None
         self._attributes[DeviceAttributes.fan_level] = None
