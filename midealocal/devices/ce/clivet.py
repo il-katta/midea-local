@@ -9,6 +9,7 @@ from midealocal.message import (
     ListTypes,
     MessageBody,
     MessageRequest,
+    MessageResponse,
     MessageType,
 )
 
@@ -184,6 +185,22 @@ class ClivetVMCMessageSet(MessageRequest):
         byte7 = 0x00
 
         return bytearray([byte0, byte1, byte2, byte3, byte4, byte5, byte6, byte7])
+
+
+class MessageClivetVMCResponse(MessageResponse):
+    """Clivet VMC message response.
+
+    Parses the short 8-byte body with Clivet semantics instead of the
+    standard CE layout (which would misread mode as fan_speed and the
+    temperatures as pm25/co2).
+    """
+
+    def __init__(self, message: bytes) -> None:
+        """Initialize Clivet VMC message response."""
+        super().__init__(bytearray(message))
+        if len(super().body) > 0:
+            self.set_body(ClivetVMCMessageBody(super().body))
+        self.set_attr()
 
 
 def is_clivet_vmc(model: str) -> bool:

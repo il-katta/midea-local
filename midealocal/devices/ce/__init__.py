@@ -8,6 +8,11 @@ from typing import Any, ClassVar, Unpack
 from midealocal.const import DeviceType
 from midealocal.device import MideaDevice, MideaDeviceInitKwargs
 
+from .clivet import (
+    ClivetVMCMessageSet,
+    MessageClivetVMCResponse,
+    is_clivet_vmc,
+)
 from .message import MessageCEResponse, MessageQuery, MessageSet
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,6 +39,9 @@ class DeviceAttributes(StrEnum):
     filter_cleaning_reminder = "filter_cleaning_reminder"
     filter_change_reminder = "filter_change_reminder"
     error_code = "error_code"
+    # Attributi del Clivet VMC (body corto, vedi clivet.py)
+    target_temperature = "target_temperature"
+    fan_level = "fan_level"
 
 
 class MideaCEDevice(MideaDevice):
@@ -152,5 +160,65 @@ class MideaCEDevice(MideaDevice):
             self.update_all({"speed_count": self._speed_count})
 
 
+class ClivetVMCDevice(MideaCEDevice):
+    """Clivet Elfofresh EVO: CE device with short 8-byte body (see clivet.py)."""
+
+    _modes: ClassVar[list[str]] = ["cooling", "heating", "ventilation", "auto"]
+
+    def __init__(
+        self,
+        *,
+        customize: str,
+        **kwargs: Unpack[MideaDeviceInitKwargs],
+    ) -> None:
+        """Initialize Clivet VMC device."""
+        super().__init__(customize=customize, **kwargs)
+        # La VMC è sempre accesa quando comunica; il body corto non ha
+        # sensori qualità aria, quindi niente valori inventati.
+        self._attributes[DeviceAttributes.power] = True
+        self._attributes[DeviceAttributes.target_temperature] = None
+        self._attributes[DeviceAttributes.fan_level] = None
+
+    def process_message(self, msg: bytes) -> dict[str, Any]:
+        """Clivet VMC process message.
+
+        Nessuna sintesi sleep/eco: il mode è un campo reale del body.
+        """
+        message = MessageClivetVMCResponse(msg)
+        _LOGGER.debug("[%s] Received: %s", self.device_id, message)
+        new_status = {}
+        for status in self._attributes:
+            if hasattr(message, str(status)):
+                value = getattr(message, str(status))
+                self._attributes[status] = value
+                new_status[str(status)] = value
+        return new_status
+
+    def _make_clivet_set(self) -> ClivetVMCMessageSet:
+        message = ClivetVMCMessageSet(self._message_protocol_version)
+        message.mode = self._attributes[DeviceAttributes.mode] or "ventilation"
+        message.fan_level = self._attributes[DeviceAttributes.fan_level] or "normal"
+        message.target_temperature = (
+            self._attributes[DeviceAttributes.target_temperature] or 22
+        )
+        return message
+
+    def set_attribute(self, attr: str, value: str | int | bool) -> None:
+        """Clivet VMC set attribute."""
+        message = self._make_clivet_set()
+        setattr(message, str(attr), value)
+        self.build_send(message)
+
+
 class MideaAppliance(MideaCEDevice):
-    """Midea CE appliance."""
+    """Midea CE appliance.
+
+    Factory: seleziona il device in base al modello (il Clivet VMC parla
+    un dialetto a 8 byte incompatibile col parsing CE standard).
+    """
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> "MideaCEDevice":
+        """Select the device class based on the model."""
+        if is_clivet_vmc(kwargs.get("model", "")):
+            return ClivetVMCDevice(*args, **kwargs)
+        return super().__new__(cls)
