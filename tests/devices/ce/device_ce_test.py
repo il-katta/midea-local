@@ -184,8 +184,8 @@ class TestClivetVMCDevice:
         self.device = ClivetVMCDevice(model="171120H4", **DEVICE_KWARGS)
 
     def test_initial_attributes(self) -> None:
-        """Test initial attributes: always on, no fabricated values."""
-        assert self.device.attributes[DeviceAttributes.power] is True
+        """Test initial attributes: nothing claimed before the first frame."""
+        assert self.device.attributes[DeviceAttributes.power] is None
         assert self.device.attributes[DeviceAttributes.mode] is None
         assert self.device.attributes[DeviceAttributes.target_temperature] is None
         assert self.device.attributes[DeviceAttributes.fan_level] is None
@@ -239,13 +239,55 @@ class TestClivetVMCDevice:
             assert new_status[DeviceAttributes.target_temperature.value] == 21.0
             assert new_status[DeviceAttributes.current_temperature.value] == 19.0
 
+    def _seed_state(  # noqa: PLR0913
+        self,
+        power: bool = True,
+        auto_set_function: bool = False,
+        mode: str = "auto",
+        fan_level: str = "normal",
+        target: float = 22.0,
+    ) -> None:
+        """Simula lo stato appreso dal primo frame."""
+        with patch(
+            "midealocal.devices.ce.MessageClivetVMCResponse",
+        ) as mock_response:
+            message = mock_response.return_value
+            message.protocol_version = ProtocolVersion.V3
+            message.power = power
+            message.auto_set_function = auto_set_function
+            message.mode = mode
+            message.fan_level = fan_level
+            message.target_temperature = target
+            self.device.process_message(b"")
+
     def test_set_attribute_builds_clivet_set(self) -> None:
-        """Test set_attribute: 8-byte Clivet command, not the standard CE set."""
+        """Test set_attribute: 5-byte wire body, not the standard CE set."""
+        self._seed_state()
         with patch.object(self.device, "build_send") as mock_build_send:
             self.device.set_attribute("mode", "heating")
             message = mock_build_send.call_args[0][0]
             assert isinstance(message, ClivetVMCMessageSet)
             assert message.body[2] == 0x02  # heating in the mode slot
+
+    def test_set_attribute_preserves_power_and_auto_function(self) -> None:
+        """Test partial set: power off and ImpAuto survive a setpoint change.
+
+        Regression: the set message defaults (power=True, auto off) used to
+        overwrite the real device state on every partial set.
+        """
+        self._seed_state(power=False, auto_set_function=True, mode="auto")
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute("target_temperature", 24)
+            body = mock_build_send.call_args[0][0].body
+            assert body[1] & 0x01 == 0  # power stays off
+            assert body[1] & 0x02  # auto_set_function stays on
+            assert body[2] == 0x04  # mode stays auto
+            assert body[4] == 24
+
+    def test_set_attribute_refuses_unknown_state(self) -> None:
+        """Test set before the first status frame: refuse, don't invent state."""
+        with pytest.raises(ValueError, match="state"):
+            self.device.set_attribute("target_temperature", 24)
 
 
 class TestMideaCEDeviceStandard:

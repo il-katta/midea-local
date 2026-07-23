@@ -194,7 +194,9 @@ class ClivetVMCDevice(MideaCEDevice):
             DeviceAttributes.filter_change_reminder,
         ):
             self._attributes.pop(unsupported, None)
-        self._attributes[DeviceAttributes.power] = True
+        # None (not True/False) until the first frame: claiming a power state
+        # before hearing one would be an invented value.
+        self._attributes[DeviceAttributes.power] = None
         self._attributes[DeviceAttributes.target_temperature] = None
         self._attributes[DeviceAttributes.fan_level] = None
         # None (not 0) until the first frame arrives: 0 would mean "no error"
@@ -218,12 +220,34 @@ class ClivetVMCDevice(MideaCEDevice):
         return new_status
 
     def _make_clivet_set(self) -> ClivetVMCMessageSet:
+        """Build a set message carrying the CURRENT device state.
+
+        The control body always transmits the full state (power, auto flag,
+        mode, fan, setpoint): a partial set built from defaults would turn
+        the device on or drop ImpAuto as a side effect. Explicit None checks
+        (not `or`): power=False is falsy but is real state.
+        """
+        state = {
+            attr: self._attributes[attr]
+            for attr in (
+                DeviceAttributes.power,
+                DeviceAttributes.auto_set_function,
+                DeviceAttributes.mode,
+                DeviceAttributes.fan_level,
+                DeviceAttributes.target_temperature,
+            )
+        }
+        unknown = [str(attr) for attr, value in state.items() if value is None]
+        if unknown:
+            msg = f"device state not known yet ({', '.join(unknown)}): refresh status first"
+            raise ValueError(msg)
+
         message = ClivetVMCMessageSet(self._message_protocol_version)
-        message.mode = self._attributes[DeviceAttributes.mode] or "ventilation"
-        message.fan_level = self._attributes[DeviceAttributes.fan_level] or "normal"
-        message.target_temperature = (
-            self._attributes[DeviceAttributes.target_temperature] or 22
-        )
+        message.power = state[DeviceAttributes.power]
+        message.auto_set_function = state[DeviceAttributes.auto_set_function]
+        message.mode = state[DeviceAttributes.mode]
+        message.fan_level = state[DeviceAttributes.fan_level]
+        message.target_temperature = state[DeviceAttributes.target_temperature]
         return message
 
     def set_attribute(self, attr: str, value: str | int | bool) -> None:
