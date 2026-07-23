@@ -172,8 +172,10 @@ class TestClivetVMCMessageSet:
         message = ClivetVMCMessageSet(ProtocolVersion.V3)
         body = message.body
         assert len(body) == 5
-        assert body[0] == 0x01
-        assert body[1] != 0x01 or body[1] & 0x01  # flags, not a second subtype
+        assert body[0] == 0x01  # subtype, prepended by MessageRequest
+        # defaults: power on, no auto function, no silence → flags == 0x01
+        assert body[1] == 0x01
+        assert body[2] == 0x03  # ventilation
 
     def test_reduced_sets_silence_state_without_level(self) -> None:
         """Test reduced fan: silence state bit on, level stays level_1."""
