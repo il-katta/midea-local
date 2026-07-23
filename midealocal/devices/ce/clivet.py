@@ -115,9 +115,14 @@ class ClivetVMCMessageBody(MessageBody):
 
 
 class ClivetVMCMessageSet(MessageRequest):
-    """Clivet VMC message set command.
+    """Clivet VMC control command.
 
-    Used to send control commands to Clivet VMC devices.
+    Official wire body (lua jsonToData, controltype 0x01) is 5 bytes:
+    [subtype 0x01, flags, mode, silence_level, setpoint]. The subtype is
+    prepended by MessageRequest.body from body_type, so _body carries only
+    the 4 payload bytes — an earlier version duplicated the subtype and
+    padded with zeros, shifting every field by one on the device (the
+    flags value landed in the mode slot).
     """
 
     def __init__(self, protocol_version: int) -> None:
@@ -130,51 +135,32 @@ class ClivetVMCMessageSet(MessageRequest):
         )
 
         # Clivet-specific parameters
-        self.power = True  # VMC is always "on"
+        self.power = True
+        self.auto_set_function = False
         self.mode = "ventilation"  # cooling, heating, ventilation, auto
         self.fan_level = "normal"  # normal, reduced, silent
         self.target_temperature = 22  # 16-28°C
 
     @property
     def _body(self) -> bytearray:
-        """Build the 8-byte command body for Clivet VMC.
+        """Build the 4-byte control payload (subtype added by MessageRequest)."""
+        flags = 0x01 if self.power else 0x00
+        if self.auto_set_function:
+            flags |= 0x02
+        if self.fan_level in ("reduced", "silent"):
+            flags |= 0x04  # silence_function_state
 
-        Returns:
-            8-byte command body
-        """
-        # Byte 0: Message type (always 0x01)
-        byte0 = 0x01
-
-        # Byte 1: Flags (bit 2 = reduced/silent speed)
-        # 0x01 = normal, 0x05 = reduced/silent
-        byte1 = 0x05 if self.fan_level in ["reduced", "silent"] else 0x01
-
-        # Byte 2: Mode
         mode_map = {
             "cooling": 0x01,
             "heating": 0x02,
             "ventilation": 0x03,
             "auto": 0x04,
         }
-        byte2 = mode_map.get(self.mode, 0x03)
 
-        # Byte 3: Silent flag
-        # 0x01 if silent, 0x00 otherwise
-        byte3 = 0x01 if self.fan_level == "silent" else 0x00
-
-        # Byte 4: Target temperature (setpoint)
-        # Clamp to reasonable range
+        silence_level = 0x01 if self.fan_level == "silent" else 0x00
         target = max(16, min(28, int(self.target_temperature)))
-        byte4 = target
 
-        # Byte 5: Current temperature (we set to 0x00, device ignores it)
-        byte5 = 0x00
-
-        # Byte 6-7: Reserved
-        byte6 = 0x00
-        byte7 = 0x00
-
-        return bytearray([byte0, byte1, byte2, byte3, byte4, byte5, byte6, byte7])
+        return bytearray([flags, mode_map.get(self.mode, 0x03), silence_level, target])
 
 
 class MessageClivetVMCResponse(MessageResponse):

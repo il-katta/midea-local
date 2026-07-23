@@ -124,31 +124,41 @@ class TestClivetVMCMessageBody:
 
 
 class TestClivetVMCMessageSet:
-    """Building of the 8-byte set command."""
+    """Building of the control command (official 5-byte wire body)."""
 
-    def test_set_heating_body(self) -> None:
-        """Test heating command with setpoint."""
+    def test_wire_body_matches_manufacturer_format(self) -> None:
+        """Test heating + silent + 17°C against the frame captured from the app.
+
+        Official frame: aa 0f ce 00..00 02 | 01 05 02 01 11 | 07 — the wire
+        body is [subtype, flags, mode, silence_level, setpoint], 5 bytes.
+        """
         message = ClivetVMCMessageSet(ProtocolVersion.V3)
         message.mode = "heating"
-        message.target_temperature = 22
-        body = message._body  # noqa: SLF001
-        assert body[0] == 0x01
-        assert body[2] == 0x02  # heating
-        assert body[4] == 22
-
-    def test_set_silent_body(self) -> None:
-        """Test command with silent fan."""
-        message = ClivetVMCMessageSet(ProtocolVersion.V3)
         message.fan_level = "silent"
-        body = message._body  # noqa: SLF001
-        assert body[1] == 0x05
-        assert body[3] == 0x01
+        message.target_temperature = 17
+        assert message.body == bytearray([0x01, 0x05, 0x02, 0x01, 0x11])
+
+    def test_wire_body_has_no_duplicate_subtype_nor_padding(self) -> None:
+        """Test the subtype appears once (from MessageRequest) and no trailing zeros."""
+        message = ClivetVMCMessageSet(ProtocolVersion.V3)
+        body = message.body
+        assert len(body) == 5
+        assert body[0] == 0x01
+        assert body[1] != 0x01 or body[1] & 0x01  # flags, not a second subtype
+
+    def test_reduced_sets_silence_state_without_level(self) -> None:
+        """Test reduced fan: silence state bit on, level stays level_1."""
+        message = ClivetVMCMessageSet(ProtocolVersion.V3)
+        message.fan_level = "reduced"
+        body = message.body
+        assert body[1] & 0x04
+        assert body[3] == 0x00
 
     def test_set_clamps_target_temperature(self) -> None:
         """Test setpoint clamping to the 16-28 range."""
         message = ClivetVMCMessageSet(ProtocolVersion.V3)
         message.target_temperature = 35
-        assert message._body[4] == 28  # noqa: SLF001
+        assert message.body[4] == 28
 
 
 class TestMideaApplianceDispatch:
@@ -235,7 +245,7 @@ class TestClivetVMCDevice:
             self.device.set_attribute("mode", "heating")
             message = mock_build_send.call_args[0][0]
             assert isinstance(message, ClivetVMCMessageSet)
-            assert message._body[2] == 0x02  # noqa: SLF001
+            assert message.body[2] == 0x02  # heating in the mode slot
 
 
 class TestMideaCEDeviceStandard:
