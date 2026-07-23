@@ -13,6 +13,28 @@ from midealocal.message import (
     MessageType,
 )
 
+# Protocol constants from the official lua parser (T_0000_CE_171120H4_9.lua)
+SUBTYPE_STATUS = 0x01
+SUBTYPE_DAY_TIMERS = 0x02
+SUBTYPE_WEEK_TIMERS = 0x03
+STATUS_BODY_LEN = 8
+
+POWER_BIT = 0x01
+AUTO_FUNCTION_BIT = 0x02
+SILENCE_STATE_BIT = 0x04
+SILENCE_LEVEL_2 = 0x01
+
+SIGNED_TEMPERATURE_THRESHOLD = 128
+
+MODE_NAMES = {0x01: "cooling", 0x02: "heating", 0x03: "ventilation", 0x04: "auto"}
+MODE_VALUES = {name: value for value, name in MODE_NAMES.items()}
+FAN_LEVELS = ("normal", "reduced", "silent")
+
+# Range of the device's own setpoint UI (not enforced by the lua; sending
+# values outside it is untested territory, so we refuse rather than clamp)
+TARGET_TEMP_MIN = 16
+TARGET_TEMP_MAX = 28
+
 
 class ClivetVMCMessageBody(MessageBody):
     """Clivet VMC status message body (subtype 0x01, 8 bytes).
@@ -36,41 +58,29 @@ class ClivetVMCMessageBody(MessageBody):
         """Initialize Clivet VMC message body."""
         super().__init__(body)
 
-        # Initialize defaults
-        self.power = True
-        self.auto_set_function = False
-        self.mode = "ventilation"
-        self.fan_level = "normal"
-        self.target_temperature: float | None = None
-        self.current_temperature: float | None = None
-        self.error_code: int | None = None
-        self.run_mode_under_auto_control: int | None = None
-
-        # Parse only if we have enough bytes
-        body_len = len(body)
-        if body_len < 6:
+        # Only complete status frames contribute attributes: truncated frames
+        # or timer subtypes would otherwise be misread as status (and absent
+        # attributes mean "no update" for the device, not invented defaults).
+        if len(body) != STATUS_BODY_LEN or body[0] != SUBTYPE_STATUS:
             return
 
         # Byte 1: flags (official: power, auto function, silence state)
-        self.power = (body[1] & 0x01) > 0
-        self.auto_set_function = (body[1] & 0x02) > 0
-        silence_state = (body[1] & 0x04) > 0
+        self.power = (body[1] & POWER_BIT) > 0
+        self.auto_set_function = (body[1] & AUTO_FUNCTION_BIT) > 0
+        self.silence_function_state = (body[1] & SILENCE_STATE_BIT) > 0
 
-        # Byte 2: mode
-        mode_map = {
-            0x01: "cooling",
-            0x02: "heating",
-            0x03: "ventilation",
-            0x04: "auto",
-        }
-        self.mode = mode_map.get(body[2], "ventilation")
+        # Byte 2: mode — unknown values stay None (a silent "ventilation"
+        # default is how the shifted-frame bug went unnoticed for months)
+        self.mode_raw = body[2]
+        self.mode = MODE_NAMES.get(body[2])
 
-        # Byte 3: silence function level, meaningful with silence_state on
-        silence_level = body[3] == 0x01 if body_len >= 4 else False
+        # Byte 3: silence function level
+        self.silence_function_level = body[3] == SILENCE_LEVEL_2
 
-        if silence_level:
+        # Derived convenience view of the two silence fields
+        if self.silence_function_state and self.silence_function_level:
             self.fan_level = "silent"
-        elif silence_state:
+        elif self.silence_function_state:
             self.fan_level = "reduced"
         else:
             self.fan_level = "normal"
@@ -81,14 +91,16 @@ class ClivetVMCMessageBody(MessageBody):
         # Byte 5: current/ambient temperature in °C, signed per official lua
         raw_temperature = body[5]
         self.current_temperature = float(
-            raw_temperature - 256 if raw_temperature >= 128 else raw_temperature,
+            raw_temperature - 256
+            if raw_temperature >= SIGNED_TEMPERATURE_THRESHOLD
+            else raw_temperature,
         )
 
         # Byte 6: error code (the app renders 44 as "C3", the filter alarm)
-        self.error_code = body[6] if body_len >= 7 else None
+        self.error_code = body[6]
 
         # Byte 7: what AUTO is actually doing right now (mode encoding, 0=idle)
-        self.run_mode_under_auto_control = body[7] if body_len >= 8 else None
+        self.run_mode_under_auto_control = body[7]
 
         # For compatibility with climate entities that use "temperature"
         # Use target for modes with setpoint, current for ventilation
@@ -143,24 +155,33 @@ class ClivetVMCMessageSet(MessageRequest):
 
     @property
     def _body(self) -> bytearray:
-        """Build the 4-byte control payload (subtype added by MessageRequest)."""
-        flags = 0x01 if self.power else 0x00
+        """Build the 4-byte control payload (subtype added by MessageRequest).
+
+        Invalid values raise instead of being silently coerced: a wrong
+        command reaching the device is worse than an exception.
+        """
+        if self.mode not in MODE_VALUES:
+            msg = f"unknown mode {self.mode!r}, expected one of {sorted(MODE_VALUES)}"
+            raise ValueError(msg)
+        if self.fan_level not in FAN_LEVELS:
+            msg = f"unknown fan_level {self.fan_level!r}, expected one of {FAN_LEVELS}"
+            raise ValueError(msg)
+        target = int(self.target_temperature)
+        if not TARGET_TEMP_MIN <= target <= TARGET_TEMP_MAX:
+            msg = (
+                f"target_temperature {target} outside the device range "
+                f"{TARGET_TEMP_MIN}-{TARGET_TEMP_MAX}"
+            )
+            raise ValueError(msg)
+
+        flags = POWER_BIT if self.power else 0x00
         if self.auto_set_function:
-            flags |= 0x02
+            flags |= AUTO_FUNCTION_BIT
         if self.fan_level in ("reduced", "silent"):
-            flags |= 0x04  # silence_function_state
+            flags |= SILENCE_STATE_BIT
+        silence_level = SILENCE_LEVEL_2 if self.fan_level == "silent" else 0x00
 
-        mode_map = {
-            "cooling": 0x01,
-            "heating": 0x02,
-            "ventilation": 0x03,
-            "auto": 0x04,
-        }
-
-        silence_level = 0x01 if self.fan_level == "silent" else 0x00
-        target = max(16, min(28, int(self.target_temperature)))
-
-        return bytearray([flags, mode_map.get(self.mode, 0x03), silence_level, target])
+        return bytearray([flags, MODE_VALUES[self.mode], silence_level, target])
 
 
 class MessageClivetVMCResponse(MessageResponse):

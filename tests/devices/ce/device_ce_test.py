@@ -122,6 +122,35 @@ class TestClivetVMCMessageBody:
         assert body.mode == "heating"
         assert body.fan_level == "silent"
 
+    def test_silence_raw_fields_are_exposed(self) -> None:
+        """Test the two official silence fields are readable alongside fan_level."""
+        silent = ClivetVMCMessageBody(BODY_HEATING_SILENT)
+        assert silent.silence_function_state is True
+        assert silent.silence_function_level is True
+        normal = ClivetVMCMessageBody(BODY_COOLING)
+        assert normal.silence_function_state is False
+        assert normal.silence_function_level is False
+
+    def test_unknown_mode_reads_as_none_with_raw_value(self) -> None:
+        """Test unmapped mode: no silent 'ventilation' default, raw value kept."""
+        odd = bytearray([0x01, 0x01, 0x05, 0x00, 0x11, 0x1B, 0x00, 0x00])
+        body = ClivetVMCMessageBody(odd)
+        assert body.mode is None
+        assert body.mode_raw == 5
+
+    def test_timer_subtype_body_sets_no_status_attributes(self) -> None:
+        """Test a day-timer body (subtype 0x02) is not misread as status."""
+        daytimer = bytearray([0x02] + [0] * 25)
+        body = ClivetVMCMessageBody(daytimer)
+        assert not hasattr(body, "mode")
+        assert not hasattr(body, "power")
+
+    def test_truncated_body_sets_no_attributes(self) -> None:
+        """Test truncated frames contribute nothing instead of default values."""
+        body = ClivetVMCMessageBody(bytearray([0x01, 0x01]))
+        assert not hasattr(body, "power")
+        assert not hasattr(body, "mode")
+
 
 class TestClivetVMCMessageSet:
     """Building of the control command (official 5-byte wire body)."""
@@ -154,11 +183,23 @@ class TestClivetVMCMessageSet:
         assert body[1] & 0x04
         assert body[3] == 0x00
 
-    def test_set_clamps_target_temperature(self) -> None:
-        """Test setpoint clamping to the 16-28 range."""
+    def test_set_rejects_out_of_range_target(self) -> None:
+        """Test out-of-range setpoint raises instead of silently clamping."""
         message = ClivetVMCMessageSet(ProtocolVersion.V3)
         message.target_temperature = 35
-        assert message.body[4] == 28
+        with pytest.raises(ValueError, match="target"):
+            _ = message.body
+
+    def test_set_rejects_unknown_mode_and_fan_level(self) -> None:
+        """Test invalid values raise instead of silently becoming ventilation."""
+        message = ClivetVMCMessageSet(ProtocolVersion.V3)
+        message.mode = "banana"
+        with pytest.raises(ValueError, match="mode"):
+            _ = message.body
+        message.mode = "heating"
+        message.fan_level = "turbo"
+        with pytest.raises(ValueError, match="fan_level"):
+            _ = message.body
 
 
 class TestMideaApplianceDispatch:
