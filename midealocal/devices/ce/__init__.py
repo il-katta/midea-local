@@ -42,7 +42,8 @@ class DeviceAttributes(StrEnum):
     # Clivet VMC attributes (short body, see clivet.py)
     target_temperature = "target_temperature"
     fan_level = "fan_level"
-    unknown_byte6 = "unknown_byte6"
+    auto_set_function = "auto_set_function"
+    run_mode_under_auto_control = "run_mode_under_auto_control"
 
 
 class MideaCEDevice(MideaDevice):
@@ -191,13 +192,15 @@ class ClivetVMCDevice(MideaCEDevice):
             DeviceAttributes.powerful_purify,
             DeviceAttributes.filter_cleaning_reminder,
             DeviceAttributes.filter_change_reminder,
-            DeviceAttributes.error_code,
         ):
             self._attributes.pop(unsupported, None)
         self._attributes[DeviceAttributes.power] = True
         self._attributes[DeviceAttributes.target_temperature] = None
         self._attributes[DeviceAttributes.fan_level] = None
-        self._attributes[DeviceAttributes.unknown_byte6] = None
+        # None (not 0) until the first frame arrives: 0 would mean "no error"
+        self._attributes[DeviceAttributes.error_code] = None
+        self._attributes[DeviceAttributes.auto_set_function] = None
+        self._attributes[DeviceAttributes.run_mode_under_auto_control] = None
 
     def process_message(self, msg: bytes) -> dict[str, Any]:
         """Clivet VMC process message.

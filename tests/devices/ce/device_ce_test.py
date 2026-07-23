@@ -23,6 +23,8 @@ BODY_VENTILATION = bytearray([0x01, 0x01, 0x03, 0x00, 0x11, 0x1B, 0x2C, 0x00])
 BODY_COOLING = bytearray([0x01, 0x01, 0x01, 0x00, 0x18, 0x1B, 0x2C, 0x00])
 # Synthetic from the byte map verified 2025-10-26: heating, silent fan
 BODY_HEATING_SILENT = bytearray([0x01, 0x05, 0x02, 0x01, 0x16, 0x1B, 0x2C, 0x00])
+# 2026-07-23: auto mode actively cooling, C3 filter alarm active (live read)
+BODY_AUTO_COOLING = bytearray([0x01, 0x03, 0x04, 0x00, 0x11, 0x1A, 0x2C, 0x01])
 
 DEVICE_KWARGS = {
     "name": "Test Device",
@@ -64,10 +66,31 @@ class TestClivetVMCMessageBody:
         assert body.target_temperature == 24.0
         assert body.current_temperature == 27.0
 
-    def test_unknown_byte6_is_exposed_raw(self) -> None:
-        """Test byte[6]: not yet mapped, exposed raw for reverse engineering."""
-        body = ClivetVMCMessageBody(BODY_COOLING)
-        assert body.unknown_byte6 == 0x2C
+    def test_error_code_from_byte6(self) -> None:
+        """Test byte[6] is the error code (44 shows as the C3 filter alarm in the app).
+
+        Confirmed by the official lua parser: mytable["error_code"] = messageBytes[5].
+        """
+        assert ClivetVMCMessageBody(BODY_COOLING).error_code == 44
+
+    def test_auto_frame_reports_auto_function_and_run_mode(self) -> None:
+        """Test 2026-07-23 live read: auto mode, cooling under auto control."""
+        body = ClivetVMCMessageBody(BODY_AUTO_COOLING)
+        assert body.mode == "auto"
+        assert body.auto_set_function is True
+        assert body.run_mode_under_auto_control == 1  # same encoding as mode: cool
+        assert body.error_code == 44
+
+    def test_power_is_bit0_of_flags(self) -> None:
+        """Test power comes from bit0 of the flags byte, not assumed always on."""
+        powered_off = bytearray([0x01, 0x00, 0x03, 0x00, 0x11, 0x1A, 0x00, 0x00])
+        assert ClivetVMCMessageBody(powered_off).power is False
+        assert ClivetVMCMessageBody(BODY_COOLING).power is True
+
+    def test_current_temperature_is_signed(self) -> None:
+        """Test temperatures >= 128 decode as negative (official lua behaviour)."""
+        cold = bytearray([0x01, 0x01, 0x02, 0x00, 0x16, 0xF6, 0x00, 0x00])
+        assert ClivetVMCMessageBody(cold).current_temperature == -10.0
 
     def test_fan_speed_reports_selector_position(self) -> None:
         """Test fan_speed: selector position percentage, not absolute airflow."""
@@ -84,12 +107,12 @@ class TestClivetVMCMessageBody:
         for fabricated in (
             "co2",
             "pm25",
-            "error_code",
             "filter_change_reminder",
             "filter_cleaning_reminder",
             "eco_mode",
             "sleep_mode",
             "child_lock",
+            "unknown_byte6",
         ):
             assert not hasattr(body, fabricated), fabricated
 
@@ -156,14 +179,15 @@ class TestClivetVMCDevice:
         assert self.device.attributes[DeviceAttributes.mode] is None
         assert self.device.attributes[DeviceAttributes.target_temperature] is None
         assert self.device.attributes[DeviceAttributes.fan_level] is None
-        assert self.device.attributes[DeviceAttributes.unknown_byte6] is None
+        assert self.device.attributes[DeviceAttributes.error_code] is None
+        assert self.device.attributes[DeviceAttributes.auto_set_function] is None
+        assert self.device.attributes[DeviceAttributes.run_mode_under_auto_control] is None
 
     def test_unsupported_attributes_are_absent(self) -> None:
         """Test attributes the frame cannot report are absent, not lying defaults."""
         for absent in (
             DeviceAttributes.co2,
             DeviceAttributes.pm25,
-            DeviceAttributes.error_code,
             DeviceAttributes.filter_change_reminder,
             DeviceAttributes.filter_cleaning_reminder,
             DeviceAttributes.eco_mode,

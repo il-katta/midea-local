@@ -15,24 +15,21 @@ from midealocal.message import (
 
 
 class ClivetVMCMessageBody(MessageBody):
-    """Clivet VMC message body (8 bytes).
+    """Clivet VMC status message body (subtype 0x01, 8 bytes).
 
-    Based on reverse engineering of Clivet Elfofresh EVO model 171120H4.
-
-    Byte structure (VERIFIED 2025-10-26):
-    [0] = Message type (always 0x01)
-    [1] = Flags (bit 2 = reduced/silent speed)
-    [2] = Mode (0x01=cooling, 0x02=heating, 0x03=ventilation, 0x04=auto)
-    [3] = Silent flag (0x01=silent, 0x00=normal/reduced)
-    [4] = Target temperature / Setpoint (°C) - can be set by user
-    [5] = Current/ambient temperature (°C) - sensor reading
-    [6] = Reserved (0x00)
-    [7] = AUTO substate? (0x00=normal, 0x02=heating in auto mode)
-
-    Key findings:
-    - byte[4] changes when user adjusts setpoint (21→22→23→24°C)
-    - byte[5] stays constant (ambient temp from sensor, e.g., 21°C)
-    - In ventilation mode, byte[4] may be ignored or fixed
+    Byte map confirmed against the official Midea lua parser for model
+    171120H4 (T_0000_CE_171120H4_9.lua, binToModel):
+    [0] = Message subtype (0x01=status; 0x02=day timers, 0x03=week timers
+          exist too, with different layouts — not parsed here)
+    [1] = Flags: bit0=power, bit1=auto_set_function_state,
+          bit2=silence_function_state
+    [2] = Mode (0x01=cooling, 0x02=heating, 0x03=ventilation/fan, 0x04=auto)
+    [3] = Silence function level (lua: level_1/level_2)
+    [4] = Target temperature / setpoint (°C)
+    [5] = Current/ambient temperature (°C), SIGNED: >=128 means negative
+    [6] = Error code (e.g. 44 is shown as the C3 filter alarm in the app)
+    [7] = Run mode under auto control, same encoding as mode
+          (0=idle, 1=cooling, 2=heating, 3=ventilation)
     """
 
     def __init__(self, body: bytearray) -> None:
@@ -40,61 +37,58 @@ class ClivetVMCMessageBody(MessageBody):
         super().__init__(body)
 
         # Initialize defaults
-        self.power = True  # VMC is always "on" when communicating
+        self.power = True
+        self.auto_set_function = False
         self.mode = "ventilation"
         self.fan_level = "normal"
         self.target_temperature: float | None = None
         self.current_temperature: float | None = None
-        self.unknown_byte6: int | None = None
+        self.error_code: int | None = None
+        self.run_mode_under_auto_control: int | None = None
 
         # Parse only if we have enough bytes
         body_len = len(body)
         if body_len < 6:
             return
 
-        # Byte 1: Flags
-        # Bit 2 = reduced/silent speed (0=normal, 1=reduced or silent)
-        reduced_or_silent = (body[1] & 0x04) > 0
+        # Byte 1: flags (official: power, auto function, silence state)
+        self.power = (body[1] & 0x01) > 0
+        self.auto_set_function = (body[1] & 0x02) > 0
+        silence_state = (body[1] & 0x04) > 0
 
-        # Byte 2: Mode
+        # Byte 2: mode
         mode_map = {
-            0x01: "cooling",       # Raffrescamento
-            0x02: "heating",       # Riscaldamento
-            0x03: "ventilation",   # Solo Ventilazione
-            0x04: "auto",          # Auto (VERIFIED 2025-10-26)
+            0x01: "cooling",
+            0x02: "heating",
+            0x03: "ventilation",
+            0x04: "auto",
         }
         self.mode = mode_map.get(body[2], "ventilation")
 
-        # Byte 3: Silent flag
-        silent_flag = body[3] == 0x01 if body_len >= 4 else False
+        # Byte 3: silence function level, meaningful with silence_state on
+        silence_level = body[3] == 0x01 if body_len >= 4 else False
 
-        # Determine fan level
-        if silent_flag:
-            self.fan_level = "silent"      # Silenzioso
-        elif reduced_or_silent:
-            self.fan_level = "reduced"     # Ridotto
+        if silence_level:
+            self.fan_level = "silent"
+        elif silence_state:
+            self.fan_level = "reduced"
         else:
-            self.fan_level = "normal"      # Normale
+            self.fan_level = "normal"
 
-        # Byte 4: TARGET temperature (setpoint) in °C
-        # This is the temperature the user sets
-        # Can be adjusted in cooling/heating/auto modes
+        # Byte 4: target temperature (setpoint) in °C
         self.target_temperature = float(body[4])
 
-        # Byte 5: CURRENT/AMBIENT temperature (sensor reading) in °C
-        # This is the actual room temperature
-        self.current_temperature = float(body[5])
+        # Byte 5: current/ambient temperature in °C, signed per official lua
+        raw_temperature = body[5]
+        self.current_temperature = float(
+            raw_temperature - 256 if raw_temperature >= 128 else raw_temperature,
+        )
 
-        # Byte 6: meaning unknown, exposed raw for reverse engineering.
-        # Observed constant 0x2C (44) so far; candidate: error/status register
-        # (docstring above says "Reserved (0x00)" but live frames disagree).
-        self.unknown_byte6 = body[6] if body_len >= 7 else None
+        # Byte 6: error code (the app renders 44 as "C3", the filter alarm)
+        self.error_code = body[6] if body_len >= 7 else None
 
-        # Byte 7: AUTO substate (only relevant in AUTO mode)
-        # In AUTO mode, byte[7] may indicate what action AUTO is taking:
-        # 0x00 = idle/ventilation?, 0x02 = heating active?
-        # Needs more testing to confirm
-        self.auto_substate = body[7] if body_len >= 8 else 0
+        # Byte 7: what AUTO is actually doing right now (mode encoding, 0=idle)
+        self.run_mode_under_auto_control = body[7] if body_len >= 8 else None
 
         # For compatibility with climate entities that use "temperature"
         # Use target for modes with setpoint, current for ventilation
